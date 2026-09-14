@@ -55,7 +55,7 @@ app.use((req,res,next)=>{if(['GET','HEAD','OPTIONS'].includes(req.method)||!req.
 const attempts=new Map();
 function rate(req,res,next){const k=ip(req)||'unknown',now=Date.now(),a=(attempts.get(k)||[]).filter(t=>now-t<600000);if(a.length>=20)return send(res,429,{error:'Too many attempts. Please try again later.'});a.push(now);attempts.set(k,a);next();}
 async function auth(req,res,next){const s=readSession(cookies(req).ps_session);if(!s)return send(res,401,{error:'Please log in.'});try{const q=await pool.query('SELECT id,name,surname,practice,email,role,active,approval_status,created_at,last_login_at FROM users WHERE id=$1',[s.uid]);if(!q.rowCount||!q.rows[0].active){clearCookie(res);return send(res,403,{error:'Your account is pending approval or has been disabled.'});}req.user=q.rows[0];next();}catch(e){next(e);}}
-function admin(req,res,next){if(req.user?.role!=='admin'||String(req.user.email).toLowerCase()!==ADMIN_EMAIL)return send(res,403,{error:'Administrator access required.'});next();}
+function admin(req,res,next){if(req.user?.role!=='admin'||String(req.user.email).toLowerCase()!==ADMIN_EMAIL)return send(res,403,{error:`Only the protected user ${ADMIN_EMAIL} can approve or disable users.`});next();}
 
 const allowedTypes=new Set(['application/pdf','image/jpeg','image/png','application/msword','application/vnd.openxmlformats-officedocument.wordprocessingml.document','text/plain']);
 const upload=multer({storage:multer.memoryStorage(),limits:{fileSize:MAX_FILE,files:10},fileFilter:(_r,f,cb)=>allowedTypes.has(f.mimetype)?cb(null,true):cb(new Error('Unsupported file type. Use PDF, JPG, PNG, DOC, DOCX or TXT.'))});
@@ -67,22 +67,20 @@ app.post('/api/register',rate,async(req,res,next)=>{try{
   let name=clean(req.body.name,80),surname=clean(req.body.surname,80);
   const practice=clean(req.body.practice,120),email=clean(req.body.email,160).toLowerCase(),password=String(req.body.password||'');
   if(!name||!surname||!email||!PRACTICES.has(practice)||password.length<8)return send(res,400,{error:'Complete all fields. Password must be at least 8 characters.'});
-  const adminEmail=email===ADMIN_EMAIL,adminPractice=practice===ADMIN_PRACTICE,isAdminRegistration=adminEmail&&adminPractice;
-  if(adminEmail!==adminPractice)return send(res,400,{error:`Practice Secure Admin may only be registered with ${ADMIN_EMAIL}.`});
   if((await pool.query('SELECT 1 FROM users WHERE lower(email)=lower($1)',[email])).rowCount)return send(res,409,{error:'An account already exists for this email address.'});
-  const id=crypto.randomUUID(),hash=await bcrypt.hash(password,12);
-  if(isAdminRegistration){
+  const id=crypto.randomUUID(),hash=await bcrypt.hash(password,12),isProtected=email===ADMIN_EMAIL;
+  if(isProtected){
     name=ADMIN_NAME;surname=ADMIN_SURNAME;
     await pool.query("INSERT INTO users (id,name,surname,practice,email,password_hash,role,active,approval_status,approved_at) VALUES ($1,$2,$3,$4,$5,$6,'admin',true,'approved',now())",[id,name,surname,practice,email,hash]);
-    await audit(id,'administrator_registered',null,{email,practice},req);
-    return send(res,201,{ok:true,message:'Administrator account created successfully. You can now log in.'});
+    await audit(id,'protected_administrator_registered',null,{email,practice},req);
+    return send(res,201,{ok:true,message:'Protected administrator account created. You can now log in and approve user registrations.'});
   }
   await pool.query("INSERT INTO users (id,name,surname,practice,email,password_hash,role,active,approval_status) VALUES ($1,$2,$3,$4,$5,$6,'user',false,'pending')",[id,name,surname,practice,email,hash]);
   await audit(id,'user_registration_pending',null,{email,practice,approvalAdmin:ADMIN_EMAIL},req);
-  send(res,201,{ok:true,message:`Registration submitted. Annalize Keyser (${ADMIN_EMAIL}) must approve your access before you can log in.`});
+  send(res,201,{ok:true,message:`Registration submitted for ${practice}. Access is pending approval from the protected user ${ADMIN_EMAIL}.`});
 }catch(e){next(e);}});
 
-app.post('/api/login',rate,async(req,res,next)=>{try{const email=clean(req.body.email,160).toLowerCase(),password=String(req.body.password||''),q=await pool.query('SELECT * FROM users WHERE lower(email)=lower($1)',[email]);if(!q.rowCount||!(await bcrypt.compare(password,q.rows[0].password_hash))){await audit(null,'login_failed',null,{email},req);return send(res,401,{error:'Invalid email address or password.'});}const u=q.rows[0];if(!u.active)return send(res,403,{error:u.approval_status==='pending'?'Your registration is awaiting administrator approval.':'Your account has been disabled.'});await pool.query('UPDATE users SET last_login_at=now() WHERE id=$1',[u.id]);setCookie(res,u.id);await audit(u.id,'login',null,{},req);send(res,200,{ok:true,user:{id:u.id,name:u.name,surname:u.surname,practice:u.practice,email:u.email,role:u.role}});}catch(e){next(e);}});
+app.post('/api/login',rate,async(req,res,next)=>{try{const email=clean(req.body.email,160).toLowerCase(),password=String(req.body.password||''),q=await pool.query('SELECT * FROM users WHERE lower(email)=lower($1)',[email]);if(!q.rowCount||!(await bcrypt.compare(password,q.rows[0].password_hash))){await audit(null,'login_failed',null,{email},req);return send(res,401,{error:'Invalid email address or password.'});}const u=q.rows[0];if(!u.active)return send(res,403,{error:u.approval_status==='pending'?`Your registration is awaiting approval from ${ADMIN_EMAIL}.`:'Your account has been disabled.'});await pool.query('UPDATE users SET last_login_at=now() WHERE id=$1',[u.id]);setCookie(res,u.id);await audit(u.id,'login',null,{},req);send(res,200,{ok:true,user:{id:u.id,name:u.name,surname:u.surname,practice:u.practice,email:u.email,role:u.role}});}catch(e){next(e);}});
 app.post('/api/logout',auth,async(req,res)=>{await audit(req.user.id,'logout',null,{},req);clearCookie(res);send(res,200,{ok:true});});
 app.get('/api/me',auth,(req,res)=>send(res,200,{user:req.user}));
 app.post('/api/change-password',auth,async(req,res,next)=>{try{const current=String(req.body.currentPassword||''),nextPass=String(req.body.newPassword||'');if(nextPass.length<8)return send(res,400,{error:'New password must be at least 8 characters.'});const q=await pool.query('SELECT password_hash FROM users WHERE id=$1',[req.user.id]);if(!q.rowCount||!(await bcrypt.compare(current,q.rows[0].password_hash)))return send(res,400,{error:'Current password is incorrect.'});await pool.query('UPDATE users SET password_hash=$1 WHERE id=$2',[await bcrypt.hash(nextPass,12),req.user.id]);await audit(req.user.id,'password_changed',null,{},req);send(res,200,{ok:true,message:'Password updated.'});}catch(e){next(e);}});
@@ -111,9 +109,9 @@ async function bootstrap(){
   await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS approval_status text NOT NULL DEFAULT 'approved'");
   await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS approved_by uuid NULL');
   await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS approved_at timestamptz NULL');
-  await pool.query("UPDATE users SET role='admin',active=true,practice=$2,name=$3,surname=$4,approval_status='approved',approved_at=COALESCE(approved_at,now()) WHERE lower(email)=lower($1)",[ADMIN_EMAIL,ADMIN_PRACTICE,ADMIN_NAME,ADMIN_SURNAME]);
+  await pool.query("UPDATE users SET role='admin',active=true,approval_status='approved',approved_at=COALESCE(approved_at,now()) WHERE lower(email)=lower($1)",[ADMIN_EMAIL]);
   const q=await pool.query('SELECT id FROM users WHERE lower(email)=lower($1)',[ADMIN_EMAIL]);
-  if(!q.rowCount) console.log(`Administrator onboarding ready for ${ADMIN_EMAIL}.`);
+  if(!q.rowCount) console.log(`Protected administrator onboarding ready for ${ADMIN_EMAIL}.`);
   console.log('Practice Secure database ready.');
 }
 bootstrap().then(()=>app.listen(PORT,'0.0.0.0',()=>console.log(`Practice Secure server listening on port ${PORT}`))).catch(e=>{console.error('Startup failed:',e);process.exit(1);});
