@@ -29,7 +29,14 @@ async function inspectDatabase() {
     console.log('RECOVERY_SCHEMA_TABLES=' + JSON.stringify(tables.rows.map(r => r.table_name)));
     const cols = await pool.query("SELECT table_name,column_name,data_type,is_nullable,column_default FROM information_schema.columns WHERE table_schema='public' ORDER BY table_name,ordinal_position");
     console.log('RECOVERY_SCHEMA_COLUMNS=' + JSON.stringify(cols.rows));
-    console.log('Practice Secure database schema inspection complete.');
+    const counts = await pool.query("SELECT (SELECT count(*)::int FROM users) users,(SELECT count(*)::int FROM patients) patients,(SELECT count(*)::int FROM documents) documents,(SELECT count(*)::int FROM audit_log) audit_events");
+    console.log('RECOVERY_COUNTS=' + JSON.stringify(counts.rows[0]));
+    const admin = await pool.query("SELECT role,active FROM users WHERE lower(email)=lower($1) LIMIT 1", ['info@amcems.co.za']);
+    console.log('RECOVERY_ADMIN=' + JSON.stringify({exists:admin.rowCount>0, role:admin.rows[0]?.role || null, active:admin.rows[0]?.active ?? null}));
+    const docs = await pool.query("SELECT byte_size::bigint AS byte_size, octet_length(encrypted_data)::bigint AS encrypted_size, section, category FROM documents ORDER BY uploaded_at DESC LIMIT 5");
+    console.log('RECOVERY_DOC_LAYOUT=' + JSON.stringify(docs.rows.map(r => ({byte_size:String(r.byte_size),encrypted_size:String(r.encrypted_size),overhead:Number(r.encrypted_size)-Number(r.byte_size),section:r.section,category:r.category}))));
+    console.log('RECOVERY_ENV=' + JSON.stringify({SESSION_SECRET:!!process.env.SESSION_SECRET,DOC_ENCRYPTION_KEY:!!process.env.DOC_ENCRYPTION_KEY,DOC_KEY_LENGTH:(process.env.DOC_ENCRYPTION_KEY||'').length,REGISTRATION_CODE:!!process.env.REGISTRATION_CODE}));
+    console.log('Practice Secure database compatibility inspection complete.');
   } catch (err) {
     console.error('RECOVERY_SCHEMA_ERROR=' + String(err && err.message ? err.message : err));
   } finally {
