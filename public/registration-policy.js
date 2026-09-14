@@ -11,7 +11,8 @@ const optionList=(list,placeholder)=>`<option value="">${esc(placeholder)}</opti
 
 function applyRegistration(){
   const select=document.getElementById('regPractice');
-  if(!select)return;
+  if(!select||select.dataset.registrationPolicyApplied==='true')return;
+  select.dataset.registrationPolicyApplied='true';
   select.innerHTML=`<option value="${DEFAULT_REGISTRATION_PRACTICE}" selected>${DEFAULT_REGISTRATION_PRACTICE}</option>`;
   select.value=DEFAULT_REGISTRATION_PRACTICE;
   const field=select.closest('.field');
@@ -88,12 +89,15 @@ async function applyReporting(){
   }
 }
 
-function apply(){
+function applyInitial(){
   applyRegistration();
-  applyReporting();
+  if(document.getElementById('pageTitle')?.textContent.trim()==='Reporting')setTimeout(applyReporting,0);
 }
 
-const observer=new MutationObserver(()=>apply());
-observer.observe(document.documentElement,{subtree:true,childList:true});
-if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',apply,{once:true});else apply();
+document.addEventListener('click',event=>{
+  const button=event.target.closest?.('[data-page="reporting"]');
+  if(button)setTimeout(applyReporting,0);
+});
+
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',applyInitial,{once:true});else applyInitial();
 })();
