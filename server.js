@@ -14,7 +14,6 @@ const ADMIN_EMAIL = 'info@amcems.co.za';
 const ADMIN_NAME = 'Annalize';
 const ADMIN_SURNAME = 'Keyser';
 const ADMIN_PRACTICE = 'Practice Secure Admin';
-const ADMIN_INITIAL_PASSWORD = process.env.ADMIN_INITIAL_PASSWORD || '';
 const SESSION_TTL = 8 * 60 * 60 * 1000;
 const MAX_FILE = 20 * 1024 * 1024;
 const PRACTICES = new Set(['Cupido NC','Pata L','Pekeur E','Iyiola T','Shushu L','Kifumbi Z','Visagie A','Skosana L','Advanced Med Care','Practice Secure Admin']);
@@ -64,7 +63,24 @@ const upload=multer({storage:multer.memoryStorage(),limits:{fileSize:MAX_FILE,fi
 app.get('/livez',(_q,r)=>send(r,200,{ok:true}));
 app.get('/healthz',async(_q,r)=>{try{await pool.query('SELECT 1');send(r,200,{ok:true});}catch{send(r,503,{ok:false});}});
 
-app.post('/api/register',rate,async(req,res,next)=>{try{const name=clean(req.body.name,80),surname=clean(req.body.surname,80),practice=clean(req.body.practice,120),email=clean(req.body.email,160).toLowerCase(),password=String(req.body.password||'');if(!name||!surname||!email||!PRACTICES.has(practice)||password.length<8)return send(res,400,{error:'Complete all fields. Password must be at least 8 characters.'});if(email===ADMIN_EMAIL||practice===ADMIN_PRACTICE)return send(res,400,{error:'Practice Secure Admin is reserved for the administrator.'});if((await pool.query('SELECT 1 FROM users WHERE lower(email)=lower($1)',[email])).rowCount)return send(res,409,{error:'An account already exists for this email address.'});const id=crypto.randomUUID(),hash=await bcrypt.hash(password,12);await pool.query("INSERT INTO users (id,name,surname,practice,email,password_hash,role,active,approval_status) VALUES ($1,$2,$3,$4,$5,$6,'user',false,'pending')",[id,name,surname,practice,email,hash]);await audit(id,'user_registration_pending',null,{email,practice,approvalAdmin:ADMIN_EMAIL},req);send(res,201,{ok:true,message:`Registration submitted. Annalize Keyser (${ADMIN_EMAIL}) must approve your access before you can log in.`});}catch(e){next(e);}});
+app.post('/api/register',rate,async(req,res,next)=>{try{
+  let name=clean(req.body.name,80),surname=clean(req.body.surname,80);
+  const practice=clean(req.body.practice,120),email=clean(req.body.email,160).toLowerCase(),password=String(req.body.password||'');
+  if(!name||!surname||!email||!PRACTICES.has(practice)||password.length<8)return send(res,400,{error:'Complete all fields. Password must be at least 8 characters.'});
+  const adminEmail=email===ADMIN_EMAIL,adminPractice=practice===ADMIN_PRACTICE,isAdminRegistration=adminEmail&&adminPractice;
+  if(adminEmail!==adminPractice)return send(res,400,{error:`Practice Secure Admin may only be registered with ${ADMIN_EMAIL}.`});
+  if((await pool.query('SELECT 1 FROM users WHERE lower(email)=lower($1)',[email])).rowCount)return send(res,409,{error:'An account already exists for this email address.'});
+  const id=crypto.randomUUID(),hash=await bcrypt.hash(password,12);
+  if(isAdminRegistration){
+    name=ADMIN_NAME;surname=ADMIN_SURNAME;
+    await pool.query("INSERT INTO users (id,name,surname,practice,email,password_hash,role,active,approval_status,approved_at) VALUES ($1,$2,$3,$4,$5,$6,'admin',true,'approved',now())",[id,name,surname,practice,email,hash]);
+    await audit(id,'administrator_registered',null,{email,practice},req);
+    return send(res,201,{ok:true,message:'Administrator account created successfully. You can now log in.'});
+  }
+  await pool.query("INSERT INTO users (id,name,surname,practice,email,password_hash,role,active,approval_status) VALUES ($1,$2,$3,$4,$5,$6,'user',false,'pending')",[id,name,surname,practice,email,hash]);
+  await audit(id,'user_registration_pending',null,{email,practice,approvalAdmin:ADMIN_EMAIL},req);
+  send(res,201,{ok:true,message:`Registration submitted. Annalize Keyser (${ADMIN_EMAIL}) must approve your access before you can log in.`});
+}catch(e){next(e);}});
 
 app.post('/api/login',rate,async(req,res,next)=>{try{const email=clean(req.body.email,160).toLowerCase(),password=String(req.body.password||''),q=await pool.query('SELECT * FROM users WHERE lower(email)=lower($1)',[email]);if(!q.rowCount||!(await bcrypt.compare(password,q.rows[0].password_hash))){await audit(null,'login_failed',null,{email},req);return send(res,401,{error:'Invalid email address or password.'});}const u=q.rows[0];if(!u.active)return send(res,403,{error:u.approval_status==='pending'?'Your registration is awaiting administrator approval.':'Your account has been disabled.'});await pool.query('UPDATE users SET last_login_at=now() WHERE id=$1',[u.id]);setCookie(res,u.id);await audit(u.id,'login',null,{},req);send(res,200,{ok:true,user:{id:u.id,name:u.name,surname:u.surname,practice:u.practice,email:u.email,role:u.role}});}catch(e){next(e);}});
 app.post('/api/logout',auth,async(req,res)=>{await audit(req.user.id,'logout',null,{},req);clearCookie(res);send(res,200,{ok:true});});
@@ -97,7 +113,7 @@ async function bootstrap(){
   await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS approved_at timestamptz NULL');
   await pool.query("UPDATE users SET role='admin',active=true,practice=$2,name=$3,surname=$4,approval_status='approved',approved_at=COALESCE(approved_at,now()) WHERE lower(email)=lower($1)",[ADMIN_EMAIL,ADMIN_PRACTICE,ADMIN_NAME,ADMIN_SURNAME]);
   const q=await pool.query('SELECT id FROM users WHERE lower(email)=lower($1)',[ADMIN_EMAIL]);
-  if(!q.rowCount){if(!ADMIN_INITIAL_PASSWORD)throw new Error('ADMIN_INITIAL_PASSWORD is required to create the administrator.');const id=crypto.randomUUID(),hash=await bcrypt.hash(ADMIN_INITIAL_PASSWORD,12);await pool.query("INSERT INTO users (id,name,surname,practice,email,password_hash,role,active,approval_status,approved_at) VALUES ($1,$2,$3,$4,$5,$6,'admin',true,'approved',now())",[id,ADMIN_NAME,ADMIN_SURNAME,ADMIN_PRACTICE,ADMIN_EMAIL,hash]);console.log('Practice Secure administrator account created.');}
+  if(!q.rowCount) console.log(`Administrator onboarding ready for ${ADMIN_EMAIL}.`);
   console.log('Practice Secure database ready.');
 }
 bootstrap().then(()=>app.listen(PORT,'0.0.0.0',()=>console.log(`Practice Secure server listening on port ${PORT}`))).catch(e=>{console.error('Startup failed:',e);process.exit(1);});
