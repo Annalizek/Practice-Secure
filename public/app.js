@@ -2,8 +2,8 @@
 'use strict';
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 const ADMIN_EMAIL='info@amcems.co.za', ADMIN_NAME='Annalize Keyser';
-const PRACTICES=['Cupido NC','Pata L','Pekeur E','Iyiola T','Shushu L','Kifumbi Z','Visagie A','Skosana L'];
-const REG_PRACTICES=[...PRACTICES,'Advanced Med Care','Practice Secure Admin'];
+const PRACTICES=['Cupido NC','Pata L','Pekeur E','Iyiola T','Shushu L','Kifumbi Z','Visagie A','Skosana L','PR Admin','Advanced Med Care','Solomons A','Williams N'];
+const REG_PRACTICES=[...PRACTICES,'Practice Secure Admin'];
 const HOSPITALS=['Lenmed Royal Hospital & Heart Centre','Lenmed Kathu Private Hospital','Kimmed'];
 const FUNDERS=['Annlyn','Valomate','Accicare'];
 const PROGRESS=['Submitted','Claims Review','Bill Review','Finalized for Payment','Paid'];
