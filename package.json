@@ -1,0 +1,16 @@
+{
+  "name": "practice-secure-server",
+  "version": "1.0.0",
+  "private": true,
+  "type": "commonjs",
+  "engines": {"node": ">=20"},
+  "scripts": {
+    "assemble": "node -e \"console.log('Recovery build: no assembly required')\"",
+    "check": "node --check server.js",
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^5.1.0",
+    "pg": "^8.16.3"
+  }
+}
